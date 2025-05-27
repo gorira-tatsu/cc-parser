@@ -1,0 +1,3 @@
+=== Running in PRODUCTION mode (fast HTML cleaning) ===
+Starting WARC file processing...
+File opened and reader created in: 12.684µs
