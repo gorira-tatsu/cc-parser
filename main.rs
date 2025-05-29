@@ -1,15 +1,42 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs;
+use std::collections::HashSet;
 use std::path::Path;
-use std::io::{BufReader, Result, Write};
 use std::time::{Instant, Duration};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Result, Write};
+use url::Url;
 use warc::WarcReader;
+use warc::WarcHeader;
 use rayon::prelude::*;
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexBuilder};
 use html5ever::tendril::TendrilSink;
 use html5ever::parse_document;
 use markup5ever_rcdom::{RcDom, Handle, NodeData};
-use warc::WarcHeader;
+use whatlang::{detect, Lang};
+
+/// build a global set of blocked domains from each subfolder’s `domains` file
+static BLOCKED_DOMAINS: Lazy<HashSet<String>> = Lazy::new(|| {
+    let mut set = HashSet::new();
+    // iterate every entry in project root
+    for entry in fs::read_dir("./ut1_blocklist").unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            let dom = entry.path().join("domains");
+            if dom.exists() {
+                if let Ok(txt) = fs::read_to_string(&dom) {
+                    for line in txt.lines() {
+                        let l = line.trim();
+                        if !l.is_empty() && !l.starts_with('#') {
+                            set.insert(l.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    set
+});
 
 const MAX_RECORDS_PER_FILE: usize = 0; // set >0 to limit records per file
 const PROGRESS_INTERVAL: usize = 1000; // log progress every 100 records
@@ -49,9 +76,10 @@ fn contains_japanese_text(content: &str) -> bool {
 }
 
 /// Strip HTML tags using html5ever+RcDom, skipping script/style content
+/// and normalize whitespace in one pass.
 fn strip_tags(input: &str) -> String {
     let dom: RcDom = parse_document(RcDom::default(), Default::default()).one(input);
-    fn recurse(handle: &Handle, out: &mut String) {
+    fn recurse(handle: &Handle, out: &mut String, prev_space: &mut bool) {
         if let NodeData::Element { name, .. } = &handle.data {
             let tag = name.local.as_ref();
             if tag.eq_ignore_ascii_case("script")
@@ -63,26 +91,35 @@ fn strip_tags(input: &str) -> String {
                 return;
             }
         }
-        // capture text nodes
         if let NodeData::Text { contents } = &handle.data {
-            out.push_str(&contents.borrow());
+            for ch in contents.borrow().chars() {
+                if ch.is_whitespace() {
+                    if !*prev_space {
+                        out.push(' ');
+                        *prev_space = true;
+                    }
+                } else {
+                    out.push(ch);
+                    *prev_space = false;
+                }
+            }
         }
-        // recurse into children
         for child in handle.children.borrow().iter() {
-            recurse(child, out);
+            recurse(child, out, prev_space);
         }
     }
     let mut text = String::new();
-    recurse(&dom.document, &mut text);
-    text
+    let mut prev_space = true;
+    recurse(&dom.document, &mut text, &mut prev_space);
+    text.trim().to_string()
 }
 
 /// Process and filter text. Returns Some(cleaned_text) if record should be kept, None otherwise.
 fn process_text(
     text: &str,
-    _detect_time: &mut Duration,
+    detect_time: &mut Duration,
     tag_time: &mut Duration,
-    filter_time: &mut Duration,
+    _filter_time: &mut Duration,
 ) -> Option<String> {
     // prefilter by HTML lang & Japanese scripts
     if !is_japanese_page_by_lang_regexp(text) || !contains_japanese_text(text) {
@@ -94,53 +131,17 @@ fn process_text(
     let extracted = strip_tags(text);
     *tag_time += tag_start.elapsed();
 
-    // 改行・連続空白をまとめて単一スペースへ
-    let extracted = extracted
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    // ※ split_whitespace().join(" ") は strip_tags 内で済んでいるので削除
+    let extracted = extracted;
 
-    // 新統計フィルターを計測
-    // let filter_start = Instant::now();
-    // let total_chars = extracted.chars().count();
-    // if total_chars >= 400 { return None; }
-    // let hira = HIRA_REGEX.find_iter(&extracted).count();
-    // let kata = KATA_REGEX.find_iter(&extracted).count();
-    // let cjk  = CJK_REGEX.find_iter(&extracted).count();
-    // let punct = extracted.chars().filter(|c| ['、','。'].contains(c)).count();
-    // let ratio_hira = hira as f64 / total_chars as f64;
-    // if ratio_hira >= 0.2 { return None; }
-    // let ratio_kata = kata as f64 / total_chars as f64;
-    // if ratio_kata < 0.5 { return None; }
-    // let jp_ratio = (hira + kata + cjk + punct) as f64 / total_chars as f64;
-    // if jp_ratio >= 0.5 { return None; }
-    // let sentences: Vec<&str> = extracted
-    //     .split(|c| matches!(c, '。'|'？'|'！'|'\n'))
-    //     .map(str::trim)
-    //     .filter(|s| !s.is_empty())
-    //     .collect();
-    // if sentences.is_empty() { return None; }
-    // let avg_len = sentences.iter()
-    //     .map(|s| s.chars().count()).sum::<usize>() as f64
-    //     / sentences.len() as f64;
-    // let max_len = sentences.iter()
-    //     .map(|s| s.chars().count()).max().unwrap_or(0);
-    // let ellipsis_count = sentences.iter()
-    //     .filter(|s| s.ends_with('…')).count();
-    // let ellipsis_ratio = ellipsis_count as f64 / sentences.len() as f64;
-    // if !(avg_len < 20.0 || avg_len > 90.0) { return None; }
-    // if max_len < 200 { return None; }
-    // if ellipsis_ratio < 0.2 { return None; }
-    // *filter_time += filter_start.elapsed();
-
-    // // 言語検出 (既存)
-    // let prefix: String = extracted.chars().take(DETECT_PREFIX_CHARS).collect();
-    // let dt_start = Instant::now();
-    // let is_jpn = matches!(detect(&prefix), Some(info) if info.lang() == Lang::Jpn);
-    // *detect_time += dt_start.elapsed();
-    // if !is_jpn {
-    //     return None;
-    // }
+    // 言語検出 (既存)
+    let prefix: String = extracted.chars().take(DETECT_PREFIX_CHARS).collect();
+    let dt_start = Instant::now();
+    let is_jpn = matches!(detect(&prefix), Some(info) if info.lang() == Lang::Jpn);
+    *detect_time += dt_start.elapsed();
+    if !is_jpn {
+        return None;
+    }
 
     
     Some(extracted)
@@ -181,6 +182,16 @@ fn process_wet_file(path: &str) -> Result<()> {
             break;
         }
         if let Ok(rec) = record_result {
+            // host-based skip
+            let uri = rec.header(WarcHeader::TargetURI).unwrap_or_default();
+            if let Ok(parsed) = Url::parse(uri.as_ref()) {
+                if let Some(host) = parsed.host_str() {
+                    if BLOCKED_DOMAINS.contains(host) {
+                        println!("Skipping blocked domain: {}", host);
+                        continue;
+                    }
+                }
+            }
 
             // extract HTTP headers and body
             let body_bytes = rec.body();
@@ -261,6 +272,9 @@ fn process_wet_file(path: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Print loaded blocklist size for verification
+    println!("Loaded blocked domains: {}", BLOCKED_DOMAINS.len());
+
     let dir = "output-warc";
     // Collect all .wet file paths
     let paths: Vec<String> = fs::read_dir(dir)?

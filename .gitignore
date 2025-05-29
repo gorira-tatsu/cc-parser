@@ -5,3 +5,4 @@ output_wet_data
 raw_samples.txt
 *.txt
 *.warc
+ut1_blocklist
