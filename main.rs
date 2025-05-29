@@ -1,5 +1,5 @@
 use std::fs;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::path::Path;
 use std::time::{Instant, Duration};
 use std::fs::{File, OpenOptions};
@@ -43,6 +43,10 @@ const PROGRESS_INTERVAL: usize = 1000; // log progress every 100 records
 const DETECT_PREFIX_CHARS: usize = 512; // max characters for language detection (increased to catch Japanese)
 const LONG_SENTENCE_LEN: usize = 100; // threshold for 'long' sentences
 
+// n-gram 設定
+const NGRAM_SIZE: usize = 3;
+const NGRAM_REPEAT_THRESHOLD: usize = 10;
+
 // Compile regexes once
 static LANG_REGEX: Lazy<Regex> = Lazy::new(|| {
     RegexBuilder::new(r#"<html\b[^>]*\blang=['"]?([a-zA-Z-]+)['"]?"#)
@@ -53,6 +57,11 @@ static LANG_REGEX: Lazy<Regex> = Lazy::new(|| {
 static HIRA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u3040-\u309F]").unwrap());
 static KATA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u30A0-\u30FF]").unwrap());
 static CJK_REGEX:  Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u4E00-\u9FFF]").unwrap());
+static DATE_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\d{4}年\d{1,2}月").unwrap()
+});
+
+const MONTH_LIST_THRESHOLD: usize = 5;
 
 /// Check <html lang=...> attribute for 'ja'
 fn is_japanese_page_by_lang_regexp(content: &str) -> bool {
@@ -114,6 +123,48 @@ fn strip_tags(input: &str) -> String {
     text.trim().to_string()
 }
 
+
+pub fn has_repeating_ngrams(text: &str, n: usize, threshold: usize) -> bool {
+    // 1. 事前処理（小文字化、句読点・記号の除去など）
+    let normalized = text
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && !c.is_whitespace(), "");
+
+    // 2. 単語単位 (word-based) の n-gram
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+    if check_ngram_count(&words, n, threshold) {
+        return true;
+    }
+
+    // 3. 文字単位 (character-based) の n-gram
+    //   全角文字や結合文字を考慮する場合は別途対応が必要
+    //   ここでは単純な例として chars() を使う
+    let chars: Vec<char> = normalized.chars().collect();
+    if check_ngram_count(&chars, n, threshold) {
+        return true;
+    }
+
+    false
+}
+
+fn check_ngram_count<T: Eq + std::hash::Hash + Clone>(
+    tokens: &[T],
+    n: usize,
+    threshold: usize,
+) -> bool {
+    let mut counts = HashMap::new();
+    for window in tokens.windows(n) {
+        // 簡易的にコピーして集合キーを作成
+        let key: Vec<T> = window.to_vec();
+        let cnt = counts.entry(key).or_insert(0);
+        *cnt += 1;
+        if *cnt > threshold {
+            return true;
+        }
+    }
+    false
+}
+
 /// Process and filter text. Returns Some(cleaned_text) if record should be kept, None otherwise.
 fn process_text(
     text: &str,
@@ -126,10 +177,20 @@ fn process_text(
         return None;
     }
 
-    // タグ除去を html5ever で計測
-    let tag_start = Instant::now();
+    // タグ除去
     let extracted = strip_tags(text);
-    *tag_time += tag_start.elapsed();
+
+    // 年月リストが多すぎるパターンを除外
+    let date_count = DATE_REGEX.find_iter(&extracted).count();
+    if date_count > MONTH_LIST_THRESHOLD {
+        return None;
+    }
+
+    // n-gram 重複チェック
+    if has_repeating_ngrams(&extracted, NGRAM_SIZE, NGRAM_REPEAT_THRESHOLD) {
+        println!("Skipping due to repeating n-grams");
+        return None;
+    }
 
     // ※ split_whitespace().join(" ") は strip_tags 内で済んでいるので削除
     let extracted = extracted;
@@ -143,7 +204,6 @@ fn process_text(
         return None;
     }
 
-    
     Some(extracted)
 }
 
@@ -187,7 +247,6 @@ fn process_wet_file(path: &str) -> Result<()> {
             if let Ok(parsed) = Url::parse(uri.as_ref()) {
                 if let Some(host) = parsed.host_str() {
                     if BLOCKED_DOMAINS.contains(host) {
-                        println!("Skipping blocked domain: {}", host);
                         continue;
                     }
                 }
