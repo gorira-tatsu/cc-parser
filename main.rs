@@ -48,14 +48,26 @@ fn contains_japanese_text(content: &str) -> bool {
     [has_hira, has_kata, has_cjk].iter().filter(|&&b| b).count() >= 2
 }
 
-/// Strip HTML tags using html5ever+RcDom
+/// Strip HTML tags using html5ever+RcDom, skipping script/style content
 fn strip_tags(input: &str) -> String {
-    let dom: RcDom = parse_document(RcDom::default(), Default::default())
-        .one(input);
+    let dom: RcDom = parse_document(RcDom::default(), Default::default()).one(input);
     fn recurse(handle: &Handle, out: &mut String) {
+        if let NodeData::Element { name, .. } = &handle.data {
+            let tag = name.local.as_ref();
+            if tag.eq_ignore_ascii_case("script")
+                || tag.eq_ignore_ascii_case("style")
+                || tag.eq_ignore_ascii_case("header")
+                || tag.eq_ignore_ascii_case("footer")
+                || tag.eq_ignore_ascii_case("nav")
+            {
+                return;
+            }
+        }
+        // capture text nodes
         if let NodeData::Text { contents } = &handle.data {
             out.push_str(&contents.borrow());
         }
+        // recurse into children
         for child in handle.children.borrow().iter() {
             recurse(child, out);
         }
@@ -68,7 +80,7 @@ fn strip_tags(input: &str) -> String {
 /// Process and filter text. Returns Some(cleaned_text) if record should be kept, None otherwise.
 fn process_text(
     text: &str,
-    _detect_time: &mut Duration,      // renamed to `_detect_time` to avoid unused warning
+    _detect_time: &mut Duration,
     tag_time: &mut Duration,
     filter_time: &mut Duration,
 ) -> Option<String> {
@@ -88,16 +100,38 @@ fn process_text(
         .collect::<Vec<_>>()
         .join(" ");
 
-    // 長文判定を計測
-    let filter_start = Instant::now();
-    let has_long = extracted
-        .split(|c| c == '。' || c == '\n')
-        .map(str::trim)
-        .any(|seg| seg.chars().count() > LONG_SENTENCE_LEN);
-    *filter_time += filter_start.elapsed();
-    if !has_long {
-        return None;
-    }
+    // 新統計フィルターを計測
+    // let filter_start = Instant::now();
+    // let total_chars = extracted.chars().count();
+    // if total_chars >= 400 { return None; }
+    // let hira = HIRA_REGEX.find_iter(&extracted).count();
+    // let kata = KATA_REGEX.find_iter(&extracted).count();
+    // let cjk  = CJK_REGEX.find_iter(&extracted).count();
+    // let punct = extracted.chars().filter(|c| ['、','。'].contains(c)).count();
+    // let ratio_hira = hira as f64 / total_chars as f64;
+    // if ratio_hira >= 0.2 { return None; }
+    // let ratio_kata = kata as f64 / total_chars as f64;
+    // if ratio_kata < 0.5 { return None; }
+    // let jp_ratio = (hira + kata + cjk + punct) as f64 / total_chars as f64;
+    // if jp_ratio >= 0.5 { return None; }
+    // let sentences: Vec<&str> = extracted
+    //     .split(|c| matches!(c, '。'|'？'|'！'|'\n'))
+    //     .map(str::trim)
+    //     .filter(|s| !s.is_empty())
+    //     .collect();
+    // if sentences.is_empty() { return None; }
+    // let avg_len = sentences.iter()
+    //     .map(|s| s.chars().count()).sum::<usize>() as f64
+    //     / sentences.len() as f64;
+    // let max_len = sentences.iter()
+    //     .map(|s| s.chars().count()).max().unwrap_or(0);
+    // let ellipsis_count = sentences.iter()
+    //     .filter(|s| s.ends_with('…')).count();
+    // let ellipsis_ratio = ellipsis_count as f64 / sentences.len() as f64;
+    // if !(avg_len < 20.0 || avg_len > 90.0) { return None; }
+    // if max_len < 200 { return None; }
+    // if ellipsis_ratio < 0.2 { return None; }
+    // *filter_time += filter_start.elapsed();
 
     // // 言語検出 (既存)
     // let prefix: String = extracted.chars().take(DETECT_PREFIX_CHARS).collect();
