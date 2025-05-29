@@ -210,12 +210,22 @@ fn process_text(
 fn process_wet_file(path: &str) -> Result<()> {
     println!("--- Processing {} ---", path);
     
-    // Create consolidated HTML output file for this WET file
+    // Prepare output files
     let file_stem = Path::new(path).file_stem().unwrap().to_string_lossy();
     let html_filename = format!("japanese_html_{}.txt", file_stem);
-    let mut html_output = OpenOptions::new().create(true).write(true).truncate(true).open(&html_filename)?;
-    println!("Saving Japanese HTML content to {}", html_filename);
+    let mut html_output = OpenOptions::new()
+        .create(true).write(true).truncate(true)
+        .open(&html_filename)?;
     
+    // plain_texts フォルダを作成して、cleaned テキスト専用ファイルを開く
+    fs::create_dir_all("plain_texts")?;
+    let plain_filename = format!("plain_texts/{}.txt", file_stem);
+    let mut plain_output = OpenOptions::new()
+        .create(true).write(true).truncate(true)
+        .open(&plain_filename)?;
+    
+    println!("Saving Japanese HTML content to {}", html_filename);
+    println!("Saving cleaned text to {}", plain_filename);
     println!("Reading records (progress every {} records)...", PROGRESS_INTERVAL);
     std::io::stdout().flush().unwrap();
     let file_start = Instant::now();
@@ -259,7 +269,7 @@ fn process_wet_file(path: &str) -> Result<()> {
                 Err(_) => continue,
             };
             // split headers and payload
-            let (hdr, payload) = if let Some(i) = body_str.find("\r\n\r\n") {
+            let (_hdr, payload) = if let Some(i) = body_str.find("\r\n\r\n") {
                 (&body_str[..i], &body_str[i + 4..])
             } else if let Some(i) = body_str.find("\n\n") {
                 (&body_str[..i], &body_str[i + 2..])
@@ -298,6 +308,10 @@ fn process_wet_file(path: &str) -> Result<()> {
                 // write cleaned text and boundary
                 html_output.write_all(cleaned.as_bytes()).unwrap();
                 html_output.write_all(b"\n\n--- RECORD BOUNDARY ---\n\n").unwrap();
+                
+                // plain_output にはメタ無しで改行区切りで保存
+                plain_output.write_all(cleaned.as_bytes()).unwrap();
+                plain_output.write_all(b"\n").unwrap();
             }
         } else if let Err(e) = record_result {
             eprintln!("Error reading record in {}: {}", path, e);
@@ -330,10 +344,13 @@ fn process_wet_file(path: &str) -> Result<()> {
     Ok(())
 }
 
+
 fn main() -> Result<()> {
     // Print loaded blocklist size for verification
     println!("Loaded blocked domains: {}", BLOCKED_DOMAINS.len());
 
+
+    // 既存の WET ファイル処理
     let dir = "output-warc";
     // Collect all .wet file paths
     let paths: Vec<String> = fs::read_dir(dir)?
