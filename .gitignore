@@ -3,3 +3,5 @@ cc-data
 output
 output_wet_data
 raw_samples.txt
+*.txt
+*.warc

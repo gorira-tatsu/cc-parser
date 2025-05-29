@@ -6,8 +6,7 @@ use warc::WarcReader;
 use whatlang::{detect, Lang};
 use rayon::prelude::*;
 use once_cell::sync::Lazy;
-use regex::RegexBuilder;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 const MAX_RECORDS_PER_FILE: usize = 1000; // set >0 to limit records per file
 const PROGRESS_INTERVAL: usize = 1000; // log progress every 100 records
@@ -21,7 +20,9 @@ static LANG_REGEX: Lazy<Regex> = Lazy::new(|| {
         .build()
         .unwrap()
 });
-static JP_TEXT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u3040-\u30FF\u4E00-\u9FFF]").unwrap());
+static HIRA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u3040-\u309F]").unwrap());
+static KATA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u30A0-\u30FF]").unwrap());
+static CJK_REGEX:  Lazy<Regex> = Lazy::new(|| Regex::new(r"[\u4E00-\u9FFF]").unwrap());
 
 /// Check <html lang=...> attribute for 'ja'
 fn is_japanese_page_by_lang_regexp(content: &str) -> bool {
@@ -37,54 +38,60 @@ fn is_japanese_page_by_lang_regexp(content: &str) -> bool {
 
 /// Fast check for any Japanese text characters
 fn contains_japanese_text(content: &str) -> bool {
-    JP_TEXT_REGEX.is_match(content)
+    let has_hira = HIRA_REGEX.is_match(content);
+    let has_kata = KATA_REGEX.is_match(content);
+    let has_cjk  = CJK_REGEX.is_match(content);
+    // require at least two of the three scripts
+    [has_hira, has_kata, has_cjk].iter().filter(|&&b| b).count() >= 2
 }
 
-/// Process and filter text. Returns true if record should be kept (Japanese + long sentence), and dumps raw sample.
+/// Process and filter text. Returns true if record should be kept (Japanese + long sentence), and saves content to consolidated file.
 fn process_text(
     text: &str,
-    path: &str,
-    record_count: usize,
-    raw_dump: &mut File,
     detect_time: &mut Duration,
 ) -> bool {
-    // Fast prefilter by HTML lang attribute and Japanese text presence
+    // prefilter by HTML lang & Japanese scripts
     if !is_japanese_page_by_lang_regexp(text) || !contains_japanese_text(text) {
         return false;
     }
 
-    // Language detection on prefix
+    // Long sentence check: split on '。' or newline, only length threshold
+    let has_long = text
+        .split(|c| c == '。' || c == '\n')
+        .map(str::trim)
+        .any(|seg| seg.chars().count() > LONG_SENTENCE_LEN);
+    if !has_long {
+        return false;
+    }
+
+    
+
     let prefix: String = text.chars().take(DETECT_PREFIX_CHARS).collect();
     let dt_start = Instant::now();
-    let is_jpn = detect(&prefix).map_or(false, |info| info.lang() == Lang::Jpn);
+    let is_jpn = match detect(&prefix) {
+        Some(info) if info.lang() == Lang::Jpn => true,
+        _ => false,
+    };
+
+    println!("Detected language in {} chars: {}", DETECT_PREFIX_CHARS, detect(&prefix).map_or("unknown", |info| info.lang().name()));
+
     *detect_time += dt_start.elapsed();
     if !is_jpn {
         return false;
     }
-    // Long sentence check
-    let has_long = text.split('。')
-        .map(str::trim)
-        .any(|seg| seg.chars().count() > LONG_SENTENCE_LEN && seg.contains('、'));
-    if !has_long {
-        return false;
-    }
-    // Dump raw 500 chars
-    let raw_sample: String = text.chars().take(500).collect();
-    writeln!(raw_dump, "--- Raw 500-char sample from {} record {} ---", path, record_count).ok();
-    writeln!(raw_dump, "{}", raw_sample).ok();
-    writeln!(raw_dump, "--- End sample ---\n").ok();
-    // flush to guarantee the dump is written immediately
-    raw_dump.flush().unwrap();
+
     true
 }
 
 fn process_wet_file(path: &str) -> Result<()> {
     println!("--- Processing {} ---", path);
-    // Open raw sample dump file once per WET file, with filename based on the WET file stem
-    let dump_filename = format!("raw_samples_{}.txt", Path::new(path)
-        .file_stem().unwrap().to_string_lossy());
-    println!("Dumping raw samples to {}", dump_filename);
-    let mut raw_dump = OpenOptions::new().create(true).append(true).open(&dump_filename)?;
+    
+    // Create consolidated HTML output file for this WET file
+    let file_stem = Path::new(path).file_stem().unwrap().to_string_lossy();
+    let html_filename = format!("japanese_html_{}.txt", file_stem);
+    let mut html_output = OpenOptions::new().create(true).write(true).truncate(true).open(&html_filename)?;
+    println!("Saving Japanese HTML content to {}", html_filename);
+    
     println!("Reading records (progress every {} records)...", PROGRESS_INTERVAL);
     std::io::stdout().flush().unwrap();
     let file_start = Instant::now();
@@ -119,10 +126,12 @@ fn process_wet_file(path: &str) -> Result<()> {
 
             // Process and filter text
             let pp_start = Instant::now();
-            let keep = process_text(&text, path, record_count, &mut raw_dump, &mut total_detect_time);
+            let keep = process_text(&text, &mut total_detect_time);
             total_process_time += pp_start.elapsed();
             if keep {
                 kept_count += 1;
+                html_output.write_all(text.as_bytes()).unwrap();
+                html_output.write_all(b"\n\n--- RECORD BOUNDARY ---\n\n").unwrap();
             } else {
                 continue;
             }
@@ -159,5 +168,6 @@ fn main() -> Result<()> {
             eprintln!("Error processing {}: {}", path, e);
         }
     });
+
     Ok(())
 }
