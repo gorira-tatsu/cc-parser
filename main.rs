@@ -188,7 +188,6 @@ fn process_text(
 
     // n-gram 重複チェック
     if has_repeating_ngrams(&extracted, NGRAM_SIZE, NGRAM_REPEAT_THRESHOLD) {
-        println!("Skipping due to repeating n-grams");
         return None;
     }
 
@@ -351,21 +350,20 @@ fn main() -> Result<()> {
 
 
     // 既存の WET ファイル処理
-    let dir = "output-warc";
-    // Collect all .wet file paths
-    let paths: Vec<String> = fs::read_dir(dir)?
+    let dir = "cc-data/warc";
+
+    // 並列に .wet ファイルを処理
+    fs::read_dir(dir)?
+        .par_bridge()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("warc"))
         .filter_map(|p| p.to_str().map(|s| s.to_string()))
-        .collect();
-
-    // Process files in parallel
-    paths.par_iter().for_each(|path| {
-        if let Err(e) = process_wet_file(path) {
-            eprintln!("Error processing {}: {}", path, e);
-        }
-    });
+        .for_each(|path| {
+            if let Err(e) = process_wet_file(&path) {
+                eprintln!("Error processing {}: {}", path, e);
+            }
+        });
 
     Ok(())
 }
