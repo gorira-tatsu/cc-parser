@@ -1,0 +1,63 @@
+WARC/1.0
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:4ab621bd-7506-466a-afcf-a9026e2ee465>
+WARC-Target-URI: http://example.com/
+WARC-Date: 2024-01-01T00:00:00Z
+Content-Length: 96
+Content-Type: application/http; msgtype=response
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+
+<html><body>Hello World</body></html>
+
+WARC/1.0
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:c7ce0061-8e52-4b58-b6dc-1d7d98e2004e>
+WARC-Target-URI: http://example.org/
+WARC-Date: 2024-01-01T00:00:00Z
+Content-Length: 96
+Content-Type: application/http; msgtype=response
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+
+<html><body>Second Page</body></html>
+
+WARC/1.0
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:1c3b1c38-abd9-4d1b-9451-a11111111111>
+WARC-Target-URI: http://example.jp/
+WARC-Date: 2024-01-01T00:00:00Z
+Content-Length: 244
+Content-Type: application/http; msgtype=response
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+
+<html lang="ja">
+<body>
+<p>こんにちは、これはサンプルの日本語ページです。</p>
+<p>テストのためのコンテンツが含まれています。</p>
+</body>
+</html>
+
+WARC/1.0
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:2d4e2c11-0000-4f3c-bbbb-b22222222222>
+WARC-Target-URI: http://example.net/
+WARC-Date: 2024-01-01T00:00:00Z
+Content-Length: 334
+Content-Type: application/http; msgtype=response
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+
+<html lang="ja">
+<head><title>サンプルページ</title></head>
+<body>
+<h1>日本語のテスト</h1>
+<p>このページはCommon Crawlのテスト用に作成されています。</p>
+<p>実際のサイトから取得したものではありません。</p>
+</body>
+</html>

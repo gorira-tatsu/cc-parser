@@ -6,3 +6,5 @@ raw_samples.txt
 *.txt
 *.warc
 ut1_blocklist
+# allow sample WARC for tests
+!testdata/sample.warc
