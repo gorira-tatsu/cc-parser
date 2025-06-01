@@ -1,0 +1,25 @@
+WARC/1.0
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:4ab621bd-7506-466a-afcf-a9026e2ee465>
+WARC-Target-URI: http://example.com/
+WARC-Date: 2024-01-01T00:00:00Z
+Content-Length: 96
+Content-Type: application/http; msgtype=response
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+
+<html><body>Hello World</body></html>
+
+WARC/1.0
+WARC-Type: response
+WARC-Record-ID: <urn:uuid:c7ce0061-8e52-4b58-b6dc-1d7d98e2004e>
+WARC-Target-URI: http://example.org/
+WARC-Date: 2024-01-01T00:00:00Z
+Content-Length: 96
+Content-Type: application/http; msgtype=response
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=UTF-8
+
+<html><body>Second Page</body></html>
